@@ -1,11 +1,12 @@
 #!/bin/bash
 
-# Simple Network Connectivity Checker - Working Version
+# Network Connectivity Checker - Complete Working Version
 set -euo pipefail
 
 # Configuration
 VERBOSE=false
 CLUSTER_FILE=""
+EXCLUDE_LOOPBACK=true
 
 # Colors for output
 RED='\033[0;31m'
@@ -20,16 +21,31 @@ usage() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Network Interface Subnet Compatibility Checker
+Network Interface Subnet Compatibility Checker for RHEL8 Cluster Nodes
+
+DEFAULT BEHAVIOR:
+    Analyzes local network interfaces for subnet compatibility.
+    Perfect for collecting data via mmdsh or standalone analysis.
 
 OPTIONS:
     -h, --help              Show this help message
     -v, --verbose           Enable verbose output
     -f, --cluster-file FILE File containing cluster interface info for comparison
+    --dry-run              Show what would be analyzed without running
 
 EXAMPLES:
+    # Local interface analysis (for mmdsh data collection)
+    $0 -v
+
+    # Collect cluster data via mmdsh
+    mmdsh -N all -f1 '$0 -v' > cluster_interfaces.txt
+
     # Analyze cluster-wide compatibility using collected data
     $0 -f cluster_interfaces.txt -v
+
+WORKFLOW:
+    1. Collect cluster data: mmdsh -N all -f1 '/path/to/checkNet.sh -v' > cluster_nets.txt
+    2. Analyze compatibility: $0 -f cluster_nets.txt -v
 
 EOF
 }
@@ -85,6 +101,120 @@ get_network_address() {
     local net_d=$(( network_int & 0xFF ))
     
     echo "${net_a}.${net_b}.${net_c}.${net_d}/${prefix}"
+}
+
+# Get network interfaces using NetworkManager
+get_network_interfaces() {
+    local interfaces=()
+    
+    # Get active connections from NetworkManager
+    while IFS= read -r line; do
+        if [[ -n "$line" && "$line" != "NAME" ]]; then
+            # Skip loopback if excluded
+            if [[ "$EXCLUDE_LOOPBACK" == "true" && "$line" == "lo" ]]; then
+                continue
+            fi
+            interfaces+=("$line")
+        fi
+    done < <(nmcli -t -f DEVICE con show --active | cut -d: -f1 | sort -u)
+    
+    printf '%s\n' "${interfaces[@]}"
+}
+
+# Get IP address and subnet for an interface
+get_interface_info() {
+    local interface="$1"
+    local ip_info
+    
+    # Get IP address using NetworkManager
+    ip_info=$(nmcli -t -f IP4.ADDRESS dev show "$interface" 2>/dev/null | cut -d: -f2 | head -n1)
+    
+    if [[ -n "$ip_info" ]]; then
+        echo "$ip_info"
+    else
+        # Fallback to ip command
+        ip addr show "$interface" 2>/dev/null | grep -oP 'inet \K[\d.]+/\d+' | head -n1
+    fi
+}
+
+# Check if interface is up
+is_interface_up() {
+    local interface="$1"
+    local state
+    
+    state=$(nmcli -t -f GENERAL.STATE dev show "$interface" 2>/dev/null | cut -d: -f2)
+    
+    if [[ "$state" == "100 (connected)" ]]; then
+        return 0
+    else
+        # Fallback check using ip command
+        ip link show "$interface" 2>/dev/null | grep -q "state UP"
+    fi
+}
+
+# Analyze local interface subnets
+analyze_local_subnets() {
+    local hostname=$(hostname -s)
+    local interfaces
+    mapfile -t interfaces < <(get_network_interfaces)
+    
+    if [[ ${#interfaces[@]} -eq 0 ]]; then
+        log "ERROR" "No active network interfaces found"
+        return 1
+    fi
+    
+    log "INFO" "Analyzing local interface subnet configuration on $hostname"
+    
+    # Group interfaces by subnet
+    declare -A subnet_groups
+    declare -A interface_subnets
+    
+    for interface in "${interfaces[@]}"; do
+        # Check if interface is up
+        if ! is_interface_up "$interface"; then
+            log "WARN" "$interface: Interface is DOWN - skipping"
+            continue
+        fi
+        
+        # Get interface IP information
+        local ip_cidr
+        ip_cidr=$(get_interface_info "$interface")
+        
+        if [[ -z "$ip_cidr" ]]; then
+            log "WARN" "$interface: No IP address configured - skipping"
+            continue
+        fi
+        
+        local subnet=$(get_network_address "$ip_cidr")
+        interface_subnets["$interface"]="$ip_cidr"
+        subnet_groups["$subnet"]+="$interface "
+        
+        # Display interface status (similar to your example output)
+        printf "%-20s %-15s %-10s %s\n" "$hostname:" "$interface" "UP" "$ip_cidr"
+        log "INFO" "$interface: $ip_cidr (subnet: $subnet)"
+    done
+    
+    echo
+    
+    # Analyze subnet conflicts
+    local conflicts=0
+    for subnet in "${!subnet_groups[@]}"; do
+        local interfaces_in_subnet=(${subnet_groups[$subnet]})
+        if [[ ${#interfaces_in_subnet[@]} -gt 1 ]]; then
+            log "WARN" "Multiple interfaces in same subnet $subnet: ${interfaces_in_subnet[*]}"
+            ((conflicts++))
+        else
+            log "INFO" "Subnet $subnet: ${interfaces_in_subnet[0]} (unique)"
+        fi
+    done
+    
+    if [[ $conflicts -eq 0 ]]; then
+        log "SUCCESS" "✓ No subnet conflicts found on local node"
+    else
+        log "WARN" "⚠ Found $conflicts subnet conflict(s) on local node"
+    fi
+    
+    return 0
 }
 
 # Parse cluster interface file and analyze subnet compatibility
@@ -313,6 +443,20 @@ parse_arguments() {
                 CLUSTER_FILE="$2"
                 shift 2
                 ;;
+            --include-loopback)
+                EXCLUDE_LOOPBACK=false
+                shift
+                ;;
+            --dry-run)
+                echo "DRY RUN MODE - Would analyze the following interfaces:"
+                get_network_interfaces | while read -r iface; do
+                    local ip_cidr=$(get_interface_info "$iface")
+                    local status="UP"
+                    is_interface_up "$iface" || status="DOWN"
+                    printf "%-20s %-15s %-10s %s\n" "$(hostname -s):" "$iface" "$status" "${ip_cidr:-N/A}"
+                done
+                exit 0
+                ;;
             *)
                 log "ERROR" "Unknown option: $1"
                 usage
@@ -326,16 +470,28 @@ parse_arguments() {
 main() {
     parse_arguments "$@"
     
-    if [[ -z "$CLUSTER_FILE" ]]; then
-        log "ERROR" "Cluster file required. Use -f option."
-        usage
-        exit 1
-    fi
+    # Check for required tools
+    for tool in nmcli ip; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            log "ERROR" "Required tool '$tool' not found"
+            exit 1
+        fi
+    done
     
-    if analyze_cluster_subnets "$CLUSTER_FILE"; then
-        exit 0
+    # If cluster file is provided, analyze it instead of local interfaces
+    if [[ -n "$CLUSTER_FILE" ]]; then
+        if analyze_cluster_subnets "$CLUSTER_FILE"; then
+            exit 0
+        else
+            exit 1
+        fi
     else
-        exit 1
+        # Run local interface analysis
+        if analyze_local_subnets; then
+            exit 0
+        else
+            exit 1
+        fi
     fi
 }
 
