@@ -23,12 +23,14 @@ This tool helps validate network configurations in HPC clusters by:
 
 ```bash
 # Download the script
-wget https://example.com/checkP2PNet
-chmod +x checkP2PNet
-
-# Or copy to your cluster management node
-scp checkP2PNet user@cluster-mgmt:/path/to/scripts/
+wget https://raw.githubusercontent.com/lordachoo/CheckNMNet/refs/heads/main/checkP2PNet
+chmod +x checkNMNet
 ```
+
+OR Clone Repo
+
+git clone https://github.com/lordachoo/CheckNMNet.git
+
 
 ## Usage Modes
 
@@ -38,13 +40,13 @@ Analyze network interfaces on the current node:
 
 ```bash
 # Basic local analysis
-./checkP2PNet
+./checkNMNet
 
 # Verbose local analysis  
-./checkP2PNet -v
+./checkNMNet -v
 
 # Show what would be analyzed (dry run)
-./checkP2PNet --dry-run
+./checkNMNet --dry-run
 ```
 
 **Output Example:**
@@ -63,21 +65,21 @@ The most powerful mode for HPC cluster validation:
 
 ```bash
 # Use mmdsh to collect interface data from all nodes
-mmdsh -N all -f1 '/path/to/checkP2PNet -v' > cluster_interfaces.txt
+mmdsh -N all -f1 '/path/to/checkNMNet -v' > cluster_interfaces.txt
 
 # Or collect from specific node groups
-mmdsh -N compute -f1 '/path/to/checkP2PNet -v' > compute_interfaces.txt
-mmdsh -N storage -f1 '/path/to/checkP2PNet -v' > storage_interfaces.txt
+mmdsh -N compute -f1 '/path/to/checkNMNet -v' > compute_interfaces.txt
+mmdsh -N storage -f1 '/path/to/checkNMNet -v' > storage_interfaces.txt
 ```
 
 #### Step 2: Analyze Cluster Compatibility
 
 ```bash
 # Analyze collected cluster data
-./checkP2PNet -f cluster_interfaces.txt -v
+./checkNMNet -f cluster_interfaces.txt -v
 
 # Quick analysis without verbose output
-./checkP2PNet -f cluster_interfaces.txt
+./checkNMNet -f cluster_interfaces.txt
 ```
 
 ## Example Workflow
@@ -87,11 +89,11 @@ mmdsh -N storage -f1 '/path/to/checkP2PNet -v' > storage_interfaces.txt
 ```bash
 # 1. Collect interface data from all cluster nodes
 echo "Collecting cluster network interface data..."
-mmdsh -N all -f1 '/mmfs1/.arcapix/anelson/checkP2PNet -v' > ifaces.txt
+mmdsh -N all -f1 '/mmfs1/.arcapix/anelson/checkNMNet -v' > ifaces.txt
 
 # 2. Analyze cluster-wide subnet compatibility
 echo "Analyzing cluster network topology..."
-./checkP2PNet -f ifaces.txt -v
+./checkNMNet -f ifaces.txt -v
 
 echo "=== Network validation complete ==="
 ```
@@ -137,7 +139,7 @@ When problems are detected:
 ## Command Line Options
 
 ```bash
-Usage: ./checkP2PNet [OPTIONS]
+Usage: ./checkNMNet [OPTIONS]
 
 OPTIONS:
     -h, --help                Show this help message
@@ -147,16 +149,16 @@ OPTIONS:
 
 EXAMPLES:
     # Local interface analysis
-    ./checkP2PNet -v
+    ./checkNMNet -v
     
     # Collect cluster data via mmdsh
-    mmdsh -N all -f1 './checkP2PNet -v' > cluster_nets.txt
+    mmdsh -N all -f1 './checkNMNet -v' > cluster_nets.txt
     
     # Analyze cluster topology  
-    ./checkP2PNet -f cluster_nets.txt -v
+    ./checkNMNet -f cluster_nets.txt -v
     
     # Test actual connectivity (after physical setup)
-    ./checkP2PNet -m ping-all -v
+    ./checkNMNet -m ping-all -v
 ```
 
 ## Network Topology Validation
@@ -190,7 +192,7 @@ node2.domain: node2:          interface1      UP         10.100.0.5/31
 
 ```bash
 # This command generates the correct format:
-mmdsh -N all -f1 '/path/to/checkP2PNet -v' > interfaces.txt
+mmdsh -N all -f1 '/path/to/checkNMNet -v' > interfaces.txt
 ```
 
 ## Troubleshooting
@@ -216,7 +218,7 @@ mmdsh -N all -f1 '/path/to/checkP2PNet -v' > interfaces.txt
 
 Enable maximum verbosity for troubleshooting:
 ```bash
-./checkP2PNet -f cluster_file.txt -v -l /tmp/debug.log
+./checkNMNet -f cluster_file.txt -v -l /tmp/debug.log
 cat /tmp/debug.log  # Review detailed logs
 ```
 
@@ -232,11 +234,11 @@ echo "=== HPC Cluster Network Pre-Deployment Validation ==="
 
 # 1. Collect all interface configurations
 echo "Step 1: Collecting interface data..."
-mmdsh -N all -f1 '/shared/scripts/checkP2PNet -v' > /tmp/cluster_interfaces.txt
+mmdsh -N all -f1 '/shared/scripts/checkNMNet -v' > /tmp/cluster_interfaces.txt
 
 # 2. Validate network topology
 echo "Step 2: Validating network topology..."
-if /shared/scripts/checkP2PNet -f /tmp/cluster_interfaces.txt -v; then
+if /shared/scripts/checkNMNet -f /tmp/cluster_interfaces.txt -v; then
     echo "✅ Network topology validation PASSED"
 else
     echo "❌ Network topology validation FAILED"
